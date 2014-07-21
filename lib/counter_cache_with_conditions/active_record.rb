@@ -20,15 +20,27 @@ module CounterCacheWithConditions
 
       # TODO make readonly
       ref = reflect_on_association(association_name)
-      ref.klass.send(:attr_readonly, counter_name.to_sym) if ref.klass.respond_to?(:attr_readonly)
+      if !ref.options[:polymorphic] && ref.klass.respond_to?(:attr_readonly)
+        ref.klass.send(:attr_readonly, counter_name.to_sym)
+      end
       conditions = [conditions, block] if conditions.is_a? Array
-      self.counter_cache_with_conditions_options << [ref.klass, ref.association_foreign_key, counter_name, conditions]
+      self.counter_cache_with_conditions_options << [ref.foreign_type, ref.association_foreign_key, counter_name, conditions, ref.options[:polymorphic] ]
     end
 
     module InstanceMethods
       private
+
+      def counter_cache_association_klass foreign_type, polymorphic
+        if polymorphic
+          send(foreign_type)
+        else
+          foreign_type[/(.+)_type/, 1].titleize
+        end.constantize
+      end
+
       def counter_cache_with_conditions_after_create
-        self.counter_cache_with_conditions_options.each do |klass, foreign_key, counter_name, conditions|
+        self.counter_cache_with_conditions_options.each do |foreign_type, foreign_key, counter_name, conditions, polymorphic|
+          klass = counter_cache_association_klass foreign_type, polymorphic
           if counter_conditions_match?(conditions)
             association_id = send(foreign_key)
             klass.increment_counter(counter_name, association_id) if association_id
@@ -37,7 +49,8 @@ module CounterCacheWithConditions
       end
 
       def counter_cache_with_conditions_before_update
-        self.counter_cache_with_conditions_options.each do |klass, foreign_key, counter_name, conditions|
+        self.counter_cache_with_conditions_options.each do |foreign_type, foreign_key, counter_name, conditions, polymorphic|
+          klass = counter_cache_association_klass foreign_type, polymorphic
           match_before = counter_conditions_without_changes_match?(conditions)
           match_now = counter_conditions_match?(conditions)
           if match_now && !match_before
@@ -55,7 +68,8 @@ module CounterCacheWithConditions
       end
 
       def counter_cache_with_conditions_before_destroy
-        self.counter_cache_with_conditions_options.each do |klass, foreign_key, counter_name, conditions|
+        self.counter_cache_with_conditions_options.each do |foreign_type, foreign_key, counter_name, conditions, polymorphic|
+          klass = counter_cache_association_klass foreign_type, polymorphic
           if counter_conditions_without_changes_match?(conditions)
             association_was = attribute_was(foreign_key.to_s)
             klass.decrement_counter(counter_name, association_was) if association_was
